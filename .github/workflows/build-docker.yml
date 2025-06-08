@@ -23,7 +23,7 @@ jobs:
         id: get_release
         uses: pozetroninc/github-action-get-latest-release@master
         with:
-          repository: owner/source-repo
+          repository: 42mgr/OO_CommunityServer
           token: ${{ secrets.PAT_TOKEN }}
 
       - name: Download .deb from latest release
