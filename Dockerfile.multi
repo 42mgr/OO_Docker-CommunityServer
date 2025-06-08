@@ -32,11 +32,22 @@ FROM base-system AS repo-setup
 
 ARG PACKAGE_SYSNAME="onlyoffice"
 
-# Add users and groups
-RUN addgroup --system --gid 107 ${PACKAGE_SYSNAME} && \
-    adduser -uid 104 --quiet --home /var/www/${PACKAGE_SYSNAME} --system --gid 107 ${PACKAGE_SYSNAME} && \
-    addgroup --system --gid 104 elasticsearch && \
-    adduser -uid 103 --quiet --home /nonexistent --system --gid 104 elasticsearch
+# Add users and groups with dynamic assignment to avoid conflicts
+RUN echo "📋 Creating system users and groups..." && \
+    \
+    echo "🔧 Creating onlyoffice group and user..." && \
+    addgroup --system ${PACKAGE_SYSNAME} && \
+    adduser --quiet --home /var/www/${PACKAGE_SYSNAME} --system --ingroup ${PACKAGE_SYSNAME} ${PACKAGE_SYSNAME} && \
+    \
+    echo "🔧 Creating elasticsearch group and user..." && \
+    addgroup --system elasticsearch && \
+    adduser --quiet --home /nonexistent --system --ingroup elasticsearch elasticsearch && \
+    \
+    echo "✅ Users and groups created:" && \
+    getent passwd ${PACKAGE_SYSNAME} && \
+    getent passwd elasticsearch && \
+    getent group ${PACKAGE_SYSNAME} && \
+    getent group elasticsearch
 
 # Setup repositories and keys
 RUN echo "deb [signed-by=/usr/share/keyrings/xamarin.gpg] https://download.mono-project.com/repo/ubuntu stable-focal/snapshots/6.8.0.123 main" | tee /etc/apt/sources.list.d/mono-official.list && \
@@ -133,9 +144,9 @@ RUN echo "📦 Installing custom OnlyOffice package..." && \
     echo "✅ OnlyOffice package installed successfully" && \
     rm -f /tmp/onlyoffice-communityserver.deb
 
-# Install XMPP server (if you need it)
+# Install XMPP server (if you need it) - handle gracefully if not available
 RUN apt-get update && \
-    apt-get install -yq ${PACKAGE_SYSNAME}-xmppserver || echo "XMPP server not available, skipping..." && \
+    (apt-get install -yq ${PACKAGE_SYSNAME}-xmppserver || echo "⚠️  XMPP server not available, skipping...") && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
@@ -164,9 +175,17 @@ COPY run-community-server.sh /app/run-community-server.sh
 # Set permissions
 RUN chmod -R 755 /app/*.sh
 
+# Show final user/group information
+RUN echo "📋 Final user/group configuration:" && \
+    getent passwd ${PACKAGE_SYSNAME} && \
+    getent passwd elasticsearch && \
+    ls -la /var/www/${PACKAGE_SYSNAME}/ | head -5
+
 # Configure volumes and expose ports
 VOLUME ["/sys/fs/cgroup","/var/log/${PACKAGE_SYSNAME}", "/var/www/${PACKAGE_SYSNAME}/Data", "/var/lib/mysql", "/etc/letsencrypt"]
 
 EXPOSE 80 443 5222 3306 9865 9888 9866 9871 9882 5280
 
 CMD ["/app/run-community-server.sh"]
+
+
