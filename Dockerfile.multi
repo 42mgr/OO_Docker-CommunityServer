@@ -1,9 +1,19 @@
 # Stage 1: Base system setup (rarely changes)
 FROM ubuntu:22.04 AS base-system
 
+ARG RELEASE_DATE="2016-06-21"
+ARG RELEASE_DATE_SIGN=""
+ARG VERSION="8.9.0.190"
+ARG SOURCE_REPO_URL="deb [signed-by=/usr/share/keyrings/onlyoffice.gpg] https://download.onlyoffice.com/repo/debian squeeze main"
 ARG DEBIAN_FRONTEND=noninteractive
 ARG PACKAGE_SYSNAME="onlyoffice"
 ARG ELASTICSEARCH_VERSION=7.16.3
+
+ARG ELK_DIR=/usr/share/elasticsearch
+ARG ELK_INDEX_DIR=/var/www/${PACKAGE_SYSNAME}/Data/Index
+ARG ELK_LOG_DIR=/var/log/${PACKAGE_SYSNAME}/Index
+ARG ELK_LIB_DIR=${ELK_DIR}/lib
+ARG ELK_MODULE_DIR=${ELK_DIR}/modules
 
 ENV LANG=en_US.UTF-8 \
     LANGUAGE=en_US:en \
@@ -50,8 +60,11 @@ RUN echo "📋 Creating system users and groups..." && \
     getent group elasticsearch
 
 # Setup repositories and keys
-RUN echo "deb [signed-by=/usr/share/keyrings/xamarin.gpg] https://download.mono-project.com/repo/ubuntu stable-focal/snapshots/6.8.0.123 main" | tee /etc/apt/sources.list.d/mono-official.list && \
+RUN echo "${SOURCE_REPO_URL}" >> /etc/apt/sources.list && \
+    echo "deb [signed-by=/usr/share/keyrings/xamarin.gpg] https://download.mono-project.com/repo/ubuntu stable-focal/snapshots/6.8.0.123 main" | tee /etc/apt/sources.list.d/mono-official.list && \
     echo "deb [signed-by=/usr/share/keyrings/mono-extra.gpg] https://d2nlctn12v279m.cloudfront.net/repo/mono/ubuntu focal main" | tee /etc/apt/sources.list.d/mono-extra.list && \
+    curl -fsSL https://download.onlyoffice.com/GPG-KEY-ONLYOFFICE | gpg --no-default-keyring --keyring gnupg-ring:/usr/share/keyrings/onlyoffice.gpg --import && \
+    chmod 644 /usr/share/keyrings/onlyoffice.gpg && \
     curl -fsSL https://download.mono-project.com/repo/xamarin.gpg | gpg --no-default-keyring --keyring gnupg-ring:/usr/share/keyrings/xamarin.gpg --import && \
     chmod 644 /usr/share/keyrings/xamarin.gpg && \
     curl -fsSL https://d2nlctn12v279m.cloudfront.net/repo/mono/mono.key | gpg --no-default-keyring --keyring gnupg-ring:/usr/share/keyrings/mono-extra.gpg --import && \
@@ -101,6 +114,7 @@ RUN apt-get -y update && \
                         iproute2 \
                         ffmpeg \
                         jq \
+                        mysql-client \
                         elasticsearch=${ELASTICSEARCH_VERSION} \
                         mono-webserver-hyperfastcgi=0.4-8 \
                         dotnet-sdk-7.0
