@@ -113,7 +113,7 @@ COPY onlyoffice-communityserver-custom.deb /tmp/
 RUN ls -ll /tmp
 
 RUN apt-get update && \
-  apt-get install -y /tmp/rebuilt-deb.deb
+  apt-get install -y /tmp/onlyoffice-communityserver-custom.deb
 
 COPY config /app/config/
 COPY assets /app/assets/
