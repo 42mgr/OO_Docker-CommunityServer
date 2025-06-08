@@ -1,0 +1,172 @@
+# Stage 1: Base system setup (rarely changes)
+FROM ubuntu:22.04 AS base-system
+
+ARG DEBIAN_FRONTEND=noninteractive
+ARG PACKAGE_SYSNAME="onlyoffice"
+ARG ELASTICSEARCH_VERSION=7.16.3
+
+ENV LANG=en_US.UTF-8 \
+    LANGUAGE=en_US:en \
+    LC_ALL=en_US.UTF-8 \
+    ELASTICSEARCH_VERSION=${ELASTICSEARCH_VERSION}
+
+# System updates and basic packages
+RUN apt-get -y update && \
+    apt-get -y upgrade && \
+    apt-get -y dist-upgrade && \
+    apt-get -yq install systemd \
+                        systemd-sysv \
+                        locales \
+                        software-properties-common \
+                        curl \
+                        wget \
+                        sudo \
+                        gnupg2 \
+                        ca-certificates \
+                        apt-transport-https && \
+    locale-gen en_US.UTF-8 && \
+    echo "#!/bin/sh\nexit 0" > /usr/sbin/policy-rc.d
+
+# Stage 2: Repository setup and key installation (changes occasionally)
+FROM base-system AS repo-setup
+
+ARG PACKAGE_SYSNAME="onlyoffice"
+
+# Add users and groups
+RUN addgroup --system --gid 107 ${PACKAGE_SYSNAME} && \
+    adduser -uid 104 --quiet --home /var/www/${PACKAGE_SYSNAME} --system --gid 107 ${PACKAGE_SYSNAME} && \
+    addgroup --system --gid 104 elasticsearch && \
+    adduser -uid 103 --quiet --home /nonexistent --system --gid 104 elasticsearch
+
+# Setup repositories and keys
+RUN echo "deb [signed-by=/usr/share/keyrings/xamarin.gpg] https://download.mono-project.com/repo/ubuntu stable-focal/snapshots/6.8.0.123 main" | tee /etc/apt/sources.list.d/mono-official.list && \
+    echo "deb [signed-by=/usr/share/keyrings/mono-extra.gpg] https://d2nlctn12v279m.cloudfront.net/repo/mono/ubuntu focal main" | tee /etc/apt/sources.list.d/mono-extra.list && \
+    curl -fsSL https://download.mono-project.com/repo/xamarin.gpg | gpg --no-default-keyring --keyring gnupg-ring:/usr/share/keyrings/xamarin.gpg --import && \
+    chmod 644 /usr/share/keyrings/xamarin.gpg && \
+    curl -fsSL https://d2nlctn12v279m.cloudfront.net/repo/mono/mono.key | gpg --no-default-keyring --keyring gnupg-ring:/usr/share/keyrings/mono-extra.gpg --import && \
+    chmod 644 /usr/share/keyrings/mono-extra.gpg && \
+    wget -qO - https://artifacts.elastic.co/GPG-KEY-elasticsearch | apt-key add - && \
+    echo "deb https://artifacts.elastic.co/packages/7.x/apt stable main" | tee -a /etc/apt/sources.list.d/elastic-7.x.list && \
+    wget https://packages.microsoft.com/config/ubuntu/22.04/packages-microsoft-prod.deb -O packages-microsoft-prod.deb && \
+    dpkg -i packages-microsoft-prod.deb && \
+    rm packages-microsoft-prod.deb && \
+    printf "Package: * \nPin: origin \"packages.microsoft.com\"\nPin-Priority: 1001" > /etc/apt/preferences && \
+    echo "deb [signed-by=/usr/share/keyrings/nodesource.gpg] https://deb.nodesource.com/node_18.x nodistro main" | tee /etc/apt/sources.list.d/nodesource.list && \
+    curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --no-default-keyring --keyring gnupg-ring:/usr/share/keyrings/nodesource.gpg --import && \
+    chmod 644 /usr/share/keyrings/nodesource.gpg
+
+# Stage 3: Dependencies installation (changes rarely)
+FROM repo-setup AS dependencies
+
+ARG PACKAGE_SYSNAME="onlyoffice"
+ARG ELASTICSEARCH_VERSION=7.16.3
+ARG ELK_DIR=/usr/share/elasticsearch
+ARG ELK_INDEX_DIR=/var/www/${PACKAGE_SYSNAME}/Data/Index
+ARG ELK_LOG_DIR=/var/log/${PACKAGE_SYSNAME}/Index
+
+# Install multiarch-support first
+RUN wget http://archive.ubuntu.com/ubuntu/pool/main/g/glibc/multiarch-support_2.27-3ubuntu1_amd64.deb && \
+    apt-get install ./multiarch-support_2.27-3ubuntu1_amd64.deb && \
+    rm -f ./multiarch-support_2.27-3ubuntu1_amd64.deb
+
+# Update package lists and install dependencies
+RUN apt-get -y update && \
+    apt-get install -yq cron \
+                        rsyslog \
+                        ruby-dev \
+                        ruby-god \
+                        nodejs \
+                        nginx \
+                        gdb \
+                        mono-complete \
+                        ca-certificates-mono \
+                        python3-certbot-nginx \
+                        htop \
+                        nano \
+                        dnsutils \
+                        redis-server \
+                        python3-pip \
+                        multiarch-support \
+                        iproute2 \
+                        ffmpeg \
+                        jq \
+                        elasticsearch=${ELASTICSEARCH_VERSION} \
+                        mono-webserver-hyperfastcgi=0.4-8 \
+                        dotnet-sdk-7.0
+
+# Setup directories and permissions for Elasticsearch
+RUN mkdir -p ${ELK_INDEX_DIR}/v${ELASTICSEARCH_VERSION} && \
+    mkdir -p ${ELK_LOG_DIR} && \
+    chmod -R u=rwx /var/www/${PACKAGE_SYSNAME} && \
+    chmod -R g=rx /var/www/${PACKAGE_SYSNAME} && \
+    chmod -R o=rx /var/www/${PACKAGE_SYSNAME} && \
+    chown -R elasticsearch:elasticsearch ${ELK_INDEX_DIR}/v${ELASTICSEARCH_VERSION} && \
+    chown -R elasticsearch:elasticsearch ${ELK_LOG_DIR} && \
+    chmod -R u=rwx ${ELK_INDEX_DIR}/v${ELASTICSEARCH_VERSION} && \
+    chmod -R g=rs ${ELK_INDEX_DIR}/v${ELASTICSEARCH_VERSION} && \
+    chmod -R o= ${ELK_INDEX_DIR}/v${ELASTICSEARCH_VERSION}
+
+# Clean up to reduce layer size
+RUN apt-get clean && \
+    rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+
+# Stage 4: OnlyOffice package installation (changes frequently)
+FROM dependencies AS onlyoffice-install
+
+ARG RELEASE_DATE="2016-06-21"
+ARG RELEASE_DATE_SIGN=""
+ARG VERSION="8.9.0.190"
+ARG PACKAGE_SYSNAME="onlyoffice"
+
+LABEL ${PACKAGE_SYSNAME}.community.release-date="${RELEASE_DATE}" \
+      ${PACKAGE_SYSNAME}.community.version="${VERSION}" \
+      description="Community Server is a free open-source collaborative system developed to manage documents, projects, customer relationship and emails, all in one place." \
+      maintainer="Ascensio System SIA <support@${PACKAGE_SYSNAME}.com>" \
+      securitytxt="https://www.${PACKAGE_SYSNAME}.com/.well-known/security.txt"
+
+# Copy the custom .deb file
+COPY onlyoffice-communityserver-custom.deb /tmp/onlyoffice-communityserver.deb
+
+# Install the custom OnlyOffice package
+RUN echo "📦 Installing custom OnlyOffice package..." && \
+    dpkg -i /tmp/onlyoffice-communityserver.deb || apt-get install -f -y && \
+    echo "✅ OnlyOffice package installed successfully" && \
+    rm -f /tmp/onlyoffice-communityserver.deb
+
+# Install XMPP server (if you need it)
+RUN apt-get update && \
+    apt-get install -yq ${PACKAGE_SYSNAME}-xmppserver || echo "XMPP server not available, skipping..." && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# Stage 5: Final configuration (changes occasionally)
+FROM onlyoffice-install AS final
+
+ARG PACKAGE_SYSNAME="onlyoffice"
+
+# Clean up systemd files
+RUN cd /lib/systemd/system/sysinit.target.wants/ && ls | grep -v systemd-tmpfiles-setup | xargs rm -f $1 && \
+    rm -f /lib/systemd/system/multi-user.target.wants/* \
+    /etc/systemd/system/*.wants/* \
+    /lib/systemd/system/local-fs.target.wants/* \
+    /lib/systemd/system/sockets.target.wants/*udev* \
+    /lib/systemd/system/sockets.target.wants/*initctl* \
+    /lib/systemd/system/basic.target.wants/* \
+    /lib/systemd/system/anaconda.target.wants/* \
+    /lib/systemd/system/plymouth* \
+    /lib/systemd/system/systemd-update-utmp*
+
+# Copy application files
+COPY config /app/config/
+COPY assets /app/assets/
+COPY run-community-server.sh /app/run-community-server.sh
+
+# Set permissions
+RUN chmod -R 755 /app/*.sh
+
+# Configure volumes and expose ports
+VOLUME ["/sys/fs/cgroup","/var/log/${PACKAGE_SYSNAME}", "/var/www/${PACKAGE_SYSNAME}/Data", "/var/lib/mysql", "/etc/letsencrypt"]
+
+EXPOSE 80 443 5222 3306 9865 9888 9866 9871 9882 5280
+
+CMD ["/app/run-community-server.sh"]
