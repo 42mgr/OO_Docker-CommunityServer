@@ -800,7 +800,7 @@ fi
 
 if [ "${MAIL_SERVER_ENABLED}" == "true" ]; then
 
-    timeout=120;
+    timeout=40;
     interval=10;
 
     while [ "$interval" -lt "$timeout" ] ; do
