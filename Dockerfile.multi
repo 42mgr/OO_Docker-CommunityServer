@@ -95,7 +95,10 @@ RUN wget http://archive.ubuntu.com/ubuntu/pool/main/g/glibc/multiarch-support_2.
 
 # Update package lists and install dependencies
 RUN apt-get -y update && \
-    apt-get install -yq cron \
+    apt-get install -yq gnupg2 \
+                        ca-certificates \
+                        apt-transport-https \
+                        cron \
                         rsyslog \
                         ruby-dev \
                         ruby-god \
