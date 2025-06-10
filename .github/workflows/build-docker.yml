@@ -4,22 +4,56 @@ on:
   repository_dispatch:
     types: [custom-release-trigger]
   workflow_dispatch:
+    inputs:
+      build_type:
+        description: 'Build type selection'
+        required: true
+        default: 'both'
+        type: choice
+        options:
+        - 'standard'
+        - 'multistage'
+        - 'both'
+      use_cache:
+        description: 'Use Docker cache (disable for fresh build)'
+        required: true
+        default: true
+        type: boolean
+      cache_bust:
+        description: 'Force cache invalidation (enter any text to bust cache)'
+        required: false
+        default: ''
+        type: string
 
 jobs:
+  # Determine which builds to run based on input
+  determine-builds:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Set build matrix
+        id: set-matrix
+        run: |
+          BUILD_TYPE="${{ github.event.inputs.build_type || 'both' }}"
+          
+          if [ "$BUILD_TYPE" = "standard" ]; then
+            MATRIX='{"include":[{"dockerfile":"Dockerfile.mod","tag":"latest","build_type":"standard","cache_scope":"standard"}]}'
+          elif [ "$BUILD_TYPE" = "multistage" ]; then
+            MATRIX='{"include":[{"dockerfile":"Dockerfile.multi","tag":"multi","build_type":"multistage","cache_scope":"multistage"}]}'
+          else
+            MATRIX='{"include":[{"dockerfile":"Dockerfile.mod","tag":"latest","build_type":"standard","cache_scope":"standard"},{"dockerfile":"Dockerfile.multi","tag":"multi","build_type":"multistage","cache_scope":"multistage"}]}'
+          fi
+          
+          echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
+          echo "Selected build matrix: $MATRIX"
+
   build:
+    needs: determine-builds
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false  # This is the key - builds continue even if one fails
-      matrix:
-        include:
-          - dockerfile: Dockerfile.mod
-            tag: latest
-            build_type: standard
-            cache_scope: standard
-          - dockerfile: Dockerfile.multi
-            tag: multi
-            build_type: multistage
-            cache_scope: multistage
+      matrix: ${{ fromJson(needs.determine-builds.outputs.matrix) }}
 
     steps:
       - uses: actions/checkout@v4
@@ -50,7 +84,30 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Build and push Docker image
+      - name: Prepare cache configuration
+        id: cache-config
+        run: |
+          USE_CACHE="${{ github.event.inputs.use_cache || 'true' }}"
+          CACHE_BUST="${{ github.event.inputs.cache_bust || '' }}"
+          CACHE_SCOPE="${{ matrix.cache_scope }}"
+          
+          # Add cache busting and commit hash to scope for better invalidation
+          if [ -n "$CACHE_BUST" ]; then
+            CACHE_SCOPE="${CACHE_SCOPE}-${CACHE_BUST}"
+          fi
+          CACHE_SCOPE="${CACHE_SCOPE}-${{ github.sha }}"
+          
+          echo "use_cache=$USE_CACHE" >> $GITHUB_OUTPUT
+          echo "cache_scope=$CACHE_SCOPE" >> $GITHUB_OUTPUT
+          
+          if [ "$USE_CACHE" = "true" ]; then
+            echo "✅ Cache enabled with scope: $CACHE_SCOPE"
+          else
+            echo "🚫 Cache disabled - fresh build"
+          fi
+
+      - name: Build and push Docker image (with cache)
+        if: steps.cache-config.outputs.use_cache == 'true'
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -61,11 +118,30 @@ jobs:
             mgr42/oo_crm:${{ matrix.tag }}
             mgr42/oo_crm:${{ matrix.tag }}-${{ steps.get_release.outputs.release }}
           cache-from: |
-            type=gha,scope=${{ matrix.cache_scope }}
+            type=gha,scope=${{ steps.cache-config.outputs.cache_scope }}
             type=registry,ref=mgr42/oo_crm:cache-${{ matrix.tag }}
           cache-to: |
-            type=gha,mode=max,scope=${{ matrix.cache_scope }}
+            type=gha,mode=max,scope=${{ steps.cache-config.outputs.cache_scope }}
             type=registry,ref=mgr42/oo_crm:cache-${{ matrix.tag }},mode=max
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.created=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+            org.opencontainers.image.revision=${{ github.sha }}
+            build.type=${{ matrix.build_type }}
+            build.dockerfile=${{ matrix.dockerfile }}
+
+      - name: Build and push Docker image (no cache)
+        if: steps.cache-config.outputs.use_cache == 'false'
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          push: true
+          target: ${{ matrix.build_type == 'multistage' && 'final' || '' }}
+          no-cache: true
+          tags: |
+            mgr42/oo_crm:${{ matrix.tag }}
+            mgr42/oo_crm:${{ matrix.tag }}-${{ steps.get_release.outputs.release }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.created=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
@@ -79,12 +155,17 @@ jobs:
           echo "✅ ${{ matrix.build_type }} build completed successfully!"
           echo "🏷️  Tags: mgr42/oo_crm:${{ matrix.tag }}, mgr42/oo_crm:${{ matrix.tag }}-${{ steps.get_release.outputs.release }}"
           echo "📁 Dockerfile: ${{ matrix.dockerfile }}"
+          echo "💾 Cache: ${{ steps.cache-config.outputs.use_cache == 'true' && 'Enabled' || 'Disabled' }}"
+          if [ "${{ steps.cache-config.outputs.use_cache }}" = "true" ]; then
+            echo "🔧 Cache scope: ${{ steps.cache-config.outputs.cache_scope }}"
+          fi
 
       - name: Build failure notification
         if: failure()
         run: |
           echo "❌ ${{ matrix.build_type }} build failed!"
           echo "📁 Dockerfile: ${{ matrix.dockerfile }}"
+          echo "💾 Cache: ${{ steps.cache-config.outputs.use_cache == 'true' && 'Enabled' || 'Disabled' }}"
           echo "ℹ️  Other builds will continue due to fail-fast: false"
 
   # Summary job that always runs
