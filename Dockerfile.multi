@@ -153,7 +153,7 @@ LABEL ${PACKAGE_SYSNAME}.community.release-date="${RELEASE_DATE}" \
       securitytxt="https://www.${PACKAGE_SYSNAME}.com/.well-known/security.txt"
 
 # Copy the custom .deb file
-COPY onlyoffice-communityserver-custom.deb /tmp/onlyoffice-communityserver.deb
+COPY onlyoffice-communityserver-mail-custom.deb /tmp/onlyoffice-communityserver.deb
 
 # Install the custom OnlyOffice package
 RUN echo "📦 Installing custom OnlyOffice package..." && \

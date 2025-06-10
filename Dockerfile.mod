@@ -108,12 +108,17 @@ RUN apt-get -y update && \
   apt-get clean && \
   rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
-COPY onlyoffice-communityserver-custom.deb /tmp/
+COPY onlyoffice-communityserver-mail-custom.deb /tmp/
+COPY build-info.txt /app/
 
-RUN ls -ll /tmp
+RUN ls -ll /tmp && \
+    echo "📋 Build Information:" && \
+    cat /app/build-info.txt
 
 RUN apt-get update && \
-  apt-get install -y /tmp/onlyoffice-communityserver-custom.deb
+  apt-get install -y /tmp/onlyoffice-communityserver-mail-custom.deb && \
+  echo "✅ Custom OnlyOffice package installed" && \
+  dpkg -s onlyoffice-communityserver | grep -E "(Version|X-Modified-Components)" || true
 
 COPY config /app/config/
 COPY assets /app/assets/

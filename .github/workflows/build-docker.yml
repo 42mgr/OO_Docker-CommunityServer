@@ -65,15 +65,60 @@ jobs:
           repository: 42mgr/OO_CommunityServer
           token: ${{ secrets.PAT_TOKEN }}
 
+      - name: Display release information
+        run: |
+          echo "🏷️ RELEASE INFORMATION FOR ${{ matrix.build_type }} BUILD:"
+          echo "📋 Release Tag: ${{ steps.get_release.outputs.release }}"
+          echo "📅 Release Date: $(curl -s https://api.github.com/repos/42mgr/OO_CommunityServer/releases/tags/${{ steps.get_release.outputs.release }} | jq -r '.created_at')"
+          echo "📦 Build Type: ${{ matrix.build_type }}"
+          echo "🐳 Docker Tag: ${{ matrix.tag }}"
+          echo ""
+          echo "📊 Recent releases for context:"
+          curl -s https://api.github.com/repos/42mgr/OO_CommunityServer/releases | jq -r '.[:5] | .[] | "\(.tag_name) - \(.created_at) - \(.name)"'
+          echo ""
+
       - name: Download .deb from latest release
         run: |
           echo "📦 Downloading .deb for ${{ matrix.build_type }} build..."
-          curl -L -o onlyoffice-communityserver-custom.deb \
-            -H "Authorization: Bearer ${{ secrets.PAT_TOKEN }}" \
-            https://github.com/42mgr/OO_CommunityServer/releases/download/${{ steps.get_release.outputs.release }}/onlyoffice-communityserver-custom.deb
+          echo "🏷️ Using release: ${{ steps.get_release.outputs.release }}"
           
-          echo "✅ Downloaded and renamed .deb file:"
-          ls -lh onlyoffice-communityserver-custom.deb
+          DOWNLOAD_URL="https://github.com/42mgr/OO_CommunityServer/releases/download/${{ steps.get_release.outputs.release }}/onlyoffice-communityserver-mail-custom.deb"
+          echo "🔗 Download URL: $DOWNLOAD_URL"
+          
+          # Check if the asset exists before downloading
+          if curl -s -f -I -H "Authorization: Bearer ${{ secrets.PAT_TOKEN }}" "$DOWNLOAD_URL" >/dev/null; then
+            echo "✅ Asset found, downloading..."
+            curl -L -o onlyoffice-communityserver-mail-custom.deb \
+              -H "Authorization: Bearer ${{ secrets.PAT_TOKEN }}" \
+              "$DOWNLOAD_URL"
+          else
+            echo "❌ Asset not found at expected URL, checking available assets..."
+            curl -s -H "Authorization: Bearer ${{ secrets.PAT_TOKEN }}" \
+              "https://api.github.com/repos/42mgr/OO_CommunityServer/releases/tags/${{ steps.get_release.outputs.release }}" | \
+              jq -r '.assets[] | .name'
+            exit 1
+          fi
+          
+          echo ""
+          echo "✅ Downloaded .deb file details:"
+          ls -lh onlyoffice-communityserver-mail-custom.deb
+          
+          # Create a build info file for the Docker image
+          cat > build-info.txt << EOF
+          DOCKER_BUILD_INFO
+          =================
+          Build Date: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+          Build Type: ${{ matrix.build_type }}
+          Source Release: ${{ steps.get_release.outputs.release }}
+          Docker Tag: ${{ matrix.tag }}
+          Workflow Run: ${{ github.run_number }}
+          Commit SHA: ${{ github.sha }}
+          Repository: ${{ github.repository }}
+          EOF
+          
+          echo ""
+          echo "📋 Build information created:"
+          cat build-info.txt
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -129,6 +174,12 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
             build.type=${{ matrix.build_type }}
             build.dockerfile=${{ matrix.dockerfile }}
+            build.source_release=${{ steps.get_release.outputs.release }}
+            build.workflow_run=${{ github.run_number }}
+            build.deb_source=42mgr/OO_CommunityServer
+            onlyoffice.custom.source_release=${{ steps.get_release.outputs.release }}
+            onlyoffice.custom.build_date=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+            onlyoffice.custom.build_type=${{ matrix.build_type }}
 
       - name: Build and push Docker image (no cache)
         if: steps.cache-config.outputs.use_cache == 'false'
@@ -147,7 +198,36 @@ jobs:
             org.opencontainers.image.created=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
             org.opencontainers.image.revision=${{ github.sha }}
             build.type=${{ matrix.build_type }}
+            build.source_release=${{ steps.get_release.outputs.release }}
+            build.workflow_run=${{ github.run_number }}
+            build.deb_source=42mgr/OO_CommunityServer
+            onlyoffice.custom.source_release=${{ steps.get_release.outputs.release }}
+            onlyoffice.custom.build_date=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+            onlyoffice.custom.build_type=${{ matrix.build_type }}
             build.dockerfile=${{ matrix.dockerfile }}
+
+      - name: Build success summary
+        if: success()
+        run: |
+          echo "🎉 Docker build completed successfully!"
+          echo ""
+          echo "📦 DOCKER IMAGE DETAILS:"
+          echo "  🐳 Image: mgr42/oo_crm:${{ matrix.tag }}"
+          echo "  🏷️ Tagged: ${{ matrix.tag }}-${{ steps.get_release.outputs.release }}"
+          echo "  📋 Build Type: ${{ matrix.build_type }}"
+          echo "  🔗 Source Release: ${{ steps.get_release.outputs.release }}"
+          echo "  🏗️ Workflow Run: ${{ github.run_number }}"
+          echo ""
+          echo "📋 RELEASE TRACEABILITY:"
+          echo "  ✅ This Docker image was built from:"
+          echo "     - Source: 42mgr/OO_CommunityServer"
+          echo "     - Release: ${{ steps.get_release.outputs.release }}"
+          echo "     - .deb Package: onlyoffice-communityserver-mail-custom.deb"
+          echo "     - Docker Build: ${{ github.run_number }}"
+          echo ""
+          echo "🔍 TO CHECK WHAT'S INSIDE THIS IMAGE:"
+          echo "  docker inspect mgr42/oo_crm:${{ matrix.tag }} | jq '.Config.Labels'"
+          echo "  docker run --rm mgr42/oo_crm:${{ matrix.tag }} cat /app/build-info.txt"
 
       - name: Build success notification
         if: success()

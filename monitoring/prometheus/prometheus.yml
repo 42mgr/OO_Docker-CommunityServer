@@ -1,0 +1,71 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - "alert_rules.yml"
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+          - alertmanager:9093
+
+scrape_configs:
+  # Prometheus itself
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Node Exporter - Host metrics
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: ['node-exporter:9100']
+
+  # cAdvisor - Container metrics
+  - job_name: 'cadvisor'
+    static_configs:
+      - targets: ['cadvisor:8080']
+
+  # MySQL Exporter
+  - job_name: 'mysql'
+    static_configs:
+      - targets: ['mysql-exporter:9104']
+
+  # Elasticsearch Exporter
+  - job_name: 'elasticsearch'
+    static_configs:
+      - targets: ['elasticsearch-exporter:9114']
+
+  # Traefik metrics
+  - job_name: 'traefik'
+    static_configs:
+      - targets: ['traefik:8080']
+
+  # OnlyOffice Community Server custom metrics
+  - job_name: 'onlyoffice-community'
+    static_configs:
+      - targets: ['onlyoffice-community-server:80']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+
+  # OnlyOffice Custom Monitor
+  - job_name: 'onlyoffice-monitor'
+    static_configs:
+      - targets: ['onlyoffice-monitor:8080']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+
+  # Docker containers health check
+  - job_name: 'docker-health'
+    static_configs:
+      - targets: ['onlyoffice-monitor:8080']
+    metrics_path: '/health/docker'
+    scrape_interval: 60s
+
+  # CRM Auto-linking monitoring
+  - job_name: 'crm-autolink'
+    static_configs:
+      - targets: ['onlyoffice-monitor:8080']
+    metrics_path: '/metrics/crm'
+    scrape_interval: 30s

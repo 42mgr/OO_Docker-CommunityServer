@@ -1,0 +1,496 @@
+services:
+  onlyoffice-mysql-server:
+    container_name: onlyoffice-mysql-server
+    image: mysql:8.0.29
+    environment:
+     - MYSQL_ROOT_PASSWORD=my-secret-pw
+    networks:
+     - onlyoffice
+    stdin_open: true
+    tty: true
+    restart: always
+    volumes:
+     - ./config/mysql/conf.d:/etc/mysql/conf.d
+     - ./config/mysql/docker-entrypoint-initdb.d:/docker-entrypoint-initdb.d
+     - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-pmy-secret-pw"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    labels:
+      - "traefik.enable=false"
+      - "monitoring.enable=true"
+      - "monitoring.type=database"
+
+  onlyoffice-community-server:
+    container_name: onlyoffice-community-server
+    image: mgr42/oo_crm:latest
+    depends_on:
+     - onlyoffice-mysql-server
+     - onlyoffice-document-server
+     - onlyoffice-mail-server
+     - onlyoffice-elasticsearch
+    environment:
+     - ONLYOFFICE_CORE_MACHINEKEY=core_secret
+     - CONTROL_PANEL_PORT_80_TCP=80
+     - CONTROL_PANEL_PORT_80_TCP_ADDR=onlyoffice-control-panel
+     - DOCUMENT_SERVER_PORT_80_TCP_ADDR=onlyoffice-document-server
+     - DOCUMENT_SERVER_JWT_ENABLED=true
+     - DOCUMENT_SERVER_JWT_SECRET=jwt_secret
+     - DOCUMENT_SERVER_JWT_HEADER=AuthorizationJwt
+     - MYSQL_SERVER_ROOT_PASSWORD=my-secret-pw
+     - MYSQL_SERVER_DB_NAME=onlyoffice
+     - MYSQL_SERVER_HOST=onlyoffice-mysql-server
+     - MYSQL_SERVER_USER=onlyoffice_user
+     - MYSQL_SERVER_PASS=onlyoffice_pass
+     - MAIL_SERVER_API_PORT=8081
+     - MAIL_SERVER_API_HOST=onlyoffice-mail-server
+     - MAIL_SERVER_DB_HOST=onlyoffice-mysql-server
+     - MAIL_SERVER_DB_PORT=3306
+     - MAIL_SERVER_DB_NAME=onlyoffice_mailserver
+     - MAIL_SERVER_DB_USER=mail_admin
+     - MAIL_SERVER_DB_PASS=Isadmin123
+     - ELASTICSEARCH_SERVER_HOST=onlyoffice-elasticsearch
+     - ELASTICSEARCH_SERVER_HTTPPORT=9200
+    networks:
+     - onlyoffice
+    ports:
+     - '1180:80'
+     - '11443:443'
+     - '15222:5222'
+    stdin_open: true
+    tty: true
+    restart: always
+    privileged: true
+    cgroup: host
+    volumes:
+     - community_data:/var/www/onlyoffice/Data
+     - community_log:/var/log/onlyoffice
+     - community_letsencrypt:/etc/letsencrypt
+     - document_data:/var/www/onlyoffice/DocumentServerData
+     - /sys/fs/cgroup:/sys/fs/cgroup:rw
+     - ./certs:/var/www/onlyoffice/Data/certs
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/healthcheck.aspx"]
+      interval: 60s
+      timeout: 30s
+      retries: 3
+      start_period: 120s
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.community.rule=Host(`onlyoffice.local`)"
+      - "traefik.http.services.community.loadbalancer.server.port=80"
+      - "monitoring.enable=true"
+      - "monitoring.type=webapp"
+      - "monitoring.crm.auto_linking=true"
+
+  onlyoffice-elasticsearch:
+    image: onlyoffice/elasticsearch:7.16.3
+    container_name: onlyoffice-elasticsearch
+    restart: always
+    environment:
+      - discovery.type=single-node
+      - bootstrap.memory_lock=true
+      - "ES_JAVA_OPTS=-Xms1g -Xmx1g -Dlog4j2.formatMsgNoLookups=true"
+      - "indices.fielddata.cache.size=30%"
+      - "indices.memory.index_buffer_size=30%" 
+      - "ingest.geoip.downloader.enabled=false"
+    networks:
+    - onlyoffice    
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65535
+        hard: 65535
+    volumes:
+      - es_data:/usr/share/elasticsearch/data
+    expose:
+      - "9200"
+      - "9300"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    labels:
+      - "traefik.enable=false"
+      - "monitoring.enable=true"
+      - "monitoring.type=search"
+
+  onlyoffice-document-server:
+    container_name: onlyoffice-document-server
+    image: onlyoffice/documentserver:8.1
+    stdin_open: true
+    tty: true
+    restart: always
+    environment:
+     - JWT_ENABLED=true
+     - JWT_SECRET=jwt_secret
+     - JWT_HEADER=AuthorizationJwt
+    networks:
+      - onlyoffice
+    expose:
+      - '80'
+      - '443'
+    volumes:
+       - document_data:/var/www/onlyoffice/Data
+       - document_log:/var/log/onlyoffice
+       - ./document_fonts:/usr/share/fonts/truetype/custom
+       - document_forgotten:/var/lib/onlyoffice/documentserver/App_Data/cache/files/forgotten
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    labels:
+      - "traefik.enable=false"
+      - "monitoring.enable=true"
+      - "monitoring.type=documents"
+
+  onlyoffice-mail-server:
+    container_name: onlyoffice-mail-server
+    image: onlyoffice/mailserver:1.6.75
+    depends_on:
+      - onlyoffice-mysql-server
+    hostname: ${MAIL_SERVER_HOSTNAME}
+    environment:
+       - MYSQL_SERVER=onlyoffice-mysql-server
+       - MYSQL_SERVER_PORT=3306
+       - MYSQL_ROOT_USER=mail_admin
+       - MYSQL_ROOT_PASSWD=Isadmin123
+       - MYSQL_SERVER_DB_NAME=onlyoffice_mailserver
+    networks:
+      - onlyoffice
+    restart: always
+    privileged: true
+    ports: ['125:25','1143:143','11587:587']
+    stdin_open: true
+    tty: true
+    expose:
+      - '8081'
+      - '3306'
+    volumes:
+      - mail_data:/var/vmail
+      - mail_certs:/etc/pki/tls/mailserver
+      - mail_log:/var/log
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 25 && nc -z localhost 143"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    labels:
+      - "traefik.enable=false"
+      - "monitoring.enable=true"
+      - "monitoring.type=mail"
+
+  onlyoffice-control-panel:
+    container_name: onlyoffice-control-panel
+    depends_on:
+     - onlyoffice-document-server
+     - onlyoffice-mail-server
+     - onlyoffice-community-server
+    image: onlyoffice/controlpanel:3.5.2.530
+    environment:
+     - ONLYOFFICE_CORE_MACHINEKEY=core_secret
+    expose:
+      - '80'
+      - '443'
+    restart: always
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - controlpanel_data:/var/www/onlyoffice/Data
+      - controlpanel_log:/var/log/onlyoffice
+    networks:
+      - onlyoffice
+    stdin_open: true
+    tty: true
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    labels:
+      - "traefik.enable=false"
+      - "monitoring.enable=true"
+      - "monitoring.type=control"
+
+  # ==================== MONITORING STACK ====================
+
+  # Traefik - Reverse Proxy & Load Balancer
+  traefik:
+    container_name: onlyoffice-traefik
+    image: traefik:v3.1
+    command:
+      - "--api.dashboard=true"
+      - "--api.insecure=true"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--log.level=INFO"
+      - "--accesslog=true"
+      - "--metrics.prometheus=true"
+      - "--metrics.prometheus.addEntryPointsLabels=true"
+      - "--metrics.prometheus.addServicesLabels=true"
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8080:8080"  # Traefik dashboard
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - onlyoffice
+      - monitoring
+    restart: always
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.dashboard.rule=Host(`traefik.local`)"
+      - "traefik.http.routers.dashboard.service=api@internal"
+
+  # Prometheus - Metrics Collection
+  prometheus:
+    container_name: onlyoffice-prometheus
+    image: prom/prometheus:v2.53.1
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus:/etc/prometheus
+      - prometheus_data:/prometheus
+    networks:
+      - onlyoffice
+      - monitoring
+    restart: always
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.prometheus.rule=Host(`prometheus.local`)"
+      - "traefik.http.services.prometheus.loadbalancer.server.port=9090"
+
+  # Grafana - Visualization Dashboard
+  grafana:
+    container_name: onlyoffice-grafana
+    image: grafana/grafana:11.1.0
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=onlyoffice123
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_INSTALL_PLUGINS=grafana-clock-panel,grafana-simple-json-datasource,grafana-worldmap-panel,grafana-piechart-panel
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources
+    networks:
+      - onlyoffice
+      - monitoring
+    restart: always
+    depends_on:
+      - prometheus
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.grafana.rule=Host(`monitoring.local`)"
+      - "traefik.http.services.grafana.loadbalancer.server.port=3000"
+
+  # Node Exporter - Host Metrics
+  node-exporter:
+    container_name: onlyoffice-node-exporter
+    image: prom/node-exporter:v1.8.1
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.rootfs=/rootfs'
+      - '--path.sysfs=/host/sys'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+    ports:
+      - "9100:9100"
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    networks:
+      - monitoring
+    restart: always
+
+  # cAdvisor - Container Metrics
+  cadvisor:
+    container_name: onlyoffice-cadvisor
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    ports:
+      - "8081:8080"
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    devices:
+      - /dev/kmsg
+    networks:
+      - monitoring
+    restart: always
+    privileged: true
+
+  # MySQL Exporter - Database Metrics
+  mysql-exporter:
+    container_name: onlyoffice-mysql-exporter
+    image: prom/mysqld-exporter:v0.15.1
+    environment:
+      - DATA_SOURCE_NAME=root:my-secret-pw@(onlyoffice-mysql-server:3306)/
+    ports:
+      - "9104:9104"
+    networks:
+      - onlyoffice
+      - monitoring
+    restart: always
+    depends_on:
+      - onlyoffice-mysql-server
+
+  # Elasticsearch Exporter - Search Metrics
+  elasticsearch-exporter:
+    container_name: onlyoffice-elasticsearch-exporter
+    image: quay.io/prometheuscommunity/elasticsearch-exporter:v1.7.0
+    command:
+      - '--es.uri=http://onlyoffice-elasticsearch:9200'
+    ports:
+      - "9114:9114"
+    networks:
+      - onlyoffice
+      - monitoring
+    restart: always
+    depends_on:
+      - onlyoffice-elasticsearch
+
+  # Loki - Log Aggregation
+  loki:
+    container_name: onlyoffice-loki
+    image: grafana/loki:3.0.0
+    ports:
+      - "3100:3100"
+    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - ./monitoring/loki:/etc/loki
+      - loki_data:/loki
+    networks:
+      - monitoring
+    restart: always
+
+  # Promtail - Log Collection
+  promtail:
+    container_name: onlyoffice-promtail
+    image: grafana/promtail:3.0.0
+    volumes:
+      - /var/log:/var/log:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - ./monitoring/promtail:/etc/promtail
+      - community_log:/var/log/onlyoffice:ro
+      - document_log:/var/log/onlyoffice-docs:ro
+      - mail_log:/var/log/onlyoffice-mail:ro
+    command: -config.file=/etc/promtail/config.yml
+    networks:
+      - monitoring
+    restart: always
+    depends_on:
+      - loki
+
+  # OnlyOffice Health Monitor - Custom Monitoring Service
+  onlyoffice-monitor:
+    container_name: onlyoffice-monitor
+    image: mgr42/onlyoffice-monitor:latest
+    build:
+      context: ./monitoring/custom
+      dockerfile: Dockerfile
+    environment:
+      - MYSQL_HOST=onlyoffice-mysql-server
+      - MYSQL_USER=root
+      - MYSQL_PASSWORD=my-secret-pw
+      - MYSQL_DATABASE=onlyoffice
+      - ELASTICSEARCH_HOST=onlyoffice-elasticsearch:9200
+      - COMMUNITY_SERVER_HOST=onlyoffice-community-server
+      - MAIL_SERVER_HOST=onlyoffice-mail-server
+      - DOCUMENT_SERVER_HOST=onlyoffice-document-server
+      - PROMETHEUS_PUSHGATEWAY=prometheus:9090
+      - CHECK_INTERVAL=30
+      - CRM_AUTO_LINK_MONITORING=true
+    ports:
+      - "8090:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - community_log:/var/log/onlyoffice:ro
+      - ./monitoring/custom/config:/app/config
+    networks:
+      - onlyoffice
+      - monitoring
+    restart: always
+    depends_on:
+      - onlyoffice-community-server
+      - onlyoffice-mysql-server
+      - prometheus
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.monitor.rule=Host(`monitor.local`)"
+      - "traefik.http.services.monitor.loadbalancer.server.port=8080"
+
+  # Alertmanager - Alert Management
+  alertmanager:
+    container_name: onlyoffice-alertmanager
+    image: prom/alertmanager:v0.27.0
+    ports:
+      - "9093:9093"
+    volumes:
+      - ./monitoring/alertmanager:/etc/alertmanager
+      - alertmanager_data:/alertmanager
+    command:
+      - '--config.file=/etc/alertmanager/config.yml'
+      - '--storage.path=/alertmanager'
+      - '--web.external-url=http://localhost:9093'
+    networks:
+      - monitoring
+    restart: always
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.alerts.rule=Host(`alerts.local`)"
+      - "traefik.http.services.alerts.loadbalancer.server.port=9093"
+
+networks:
+  onlyoffice:
+    driver: 'bridge'
+  monitoring:
+    driver: 'bridge'
+
+volumes:
+  # OnlyOffice volumes
+  mail_data:
+  mail_certs:
+  mail_log:
+  mail_mysql:
+  document_data:
+  document_log:
+  document_forgotten:
+  community_mysql:
+  community_data:
+  community_log:
+  community_letsencrypt:
+  controlpanel_data:
+  controlpanel_log:
+  mysql_data:
+  es_data:
+  
+  # Monitoring volumes
+  prometheus_data:
+  grafana_data:
+  loki_data:
+  alertmanager_data:

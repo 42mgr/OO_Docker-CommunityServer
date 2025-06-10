@@ -1,0 +1,124 @@
+groups:
+  - name: onlyoffice_alerts
+    rules:
+      # Container health alerts
+      - alert: ContainerDown
+        expr: up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Container {{ $labels.instance }} is down"
+          description: "Container {{ $labels.instance }} has been down for more than 1 minute"
+
+      - alert: HighCPUUsage
+        expr: rate(container_cpu_usage_seconds_total[5m]) * 100 > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High CPU usage on {{ $labels.name }}"
+          description: "Container {{ $labels.name }} CPU usage is above 80% for 5 minutes"
+
+      - alert: HighMemoryUsage
+        expr: (container_memory_usage_bytes / container_spec_memory_limit_bytes) * 100 > 90
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High memory usage on {{ $labels.name }}"
+          description: "Container {{ $labels.name }} memory usage is above 90% for 5 minutes"
+
+      # MySQL alerts
+      - alert: MySQLDown
+        expr: mysql_up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "MySQL is down"
+          description: "MySQL database is not responding"
+
+      - alert: MySQLSlowQueries
+        expr: rate(mysql_global_status_slow_queries[5m]) > 0.1
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "MySQL slow queries detected"
+          description: "MySQL has {{ $value }} slow queries per second"
+
+      # Elasticsearch alerts
+      - alert: ElasticsearchDown
+        expr: elasticsearch_cluster_health_status != 1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Elasticsearch cluster is not healthy"
+          description: "Elasticsearch cluster status is {{ $value }}"
+
+      - alert: ElasticsearchHighDiskUsage
+        expr: elasticsearch_filesystem_data_available_bytes / elasticsearch_filesystem_data_size_bytes * 100 < 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Elasticsearch disk usage is high"
+          description: "Elasticsearch disk usage is above 90%"
+
+      # OnlyOffice specific alerts
+      - alert: CommunityServerDown
+        expr: probe_success{job="onlyoffice-community"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "OnlyOffice Community Server is down"
+          description: "OnlyOffice Community Server is not responding to health checks"
+
+      - alert: DocumentServerDown
+        expr: probe_success{job="onlyoffice-document"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "OnlyOffice Document Server is down"
+          description: "OnlyOffice Document Server is not responding"
+
+      - alert: MailServerDown
+        expr: probe_success{job="onlyoffice-mail"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "OnlyOffice Mail Server is down"
+          description: "OnlyOffice Mail Server is not responding"
+
+      # CRM Auto-linking alerts
+      - alert: CRMAutoLinkingFailed
+        expr: increase(crm_autolink_errors_total[5m]) > 5
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "CRM auto-linking errors detected"
+          description: "{{ $value }} CRM auto-linking errors in the last 5 minutes"
+
+      - alert: CRMAutoLinkingServiceDown
+        expr: crm_autolink_service_up == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "CRM Auto-linking Service is down"
+          description: "The CRM auto-linking service is not running"
+
+      - alert: EmailDuplicationDetected
+        expr: increase(email_duplication_events_total[10m]) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Email duplication detected"
+          description: "{{ $value }} duplicate emails detected in the last 10 minutes"
